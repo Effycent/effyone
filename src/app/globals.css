@@ -1,0 +1,49 @@
+@import "tailwindcss";
+
+/*
+ * Identidad EffyOne: base asfalto (negro/gris muy oscuro), texto blanco y
+ * amarillo SOLO como acento (botones primarios, bordes activos, "En vivo").
+ */
+@theme inline {
+  --color-asphalt-950: #08090b;
+  --color-asphalt-900: #0e0f12;
+  --color-asphalt-850: #131418;
+  --color-asphalt-800: #1a1c21;
+  --color-asphalt-700: #262930;
+  --color-asphalt-600: #3a3e47;
+  --color-asphalt-400: #8b909b;
+  --color-asphalt-200: #c9ccd3;
+
+  --color-brand: #fed306;
+  --color-brand-strong: #ffe14a;
+  --color-danger: #ff6b6b;
+  --color-ok: #4ade80;
+
+  --font-sans: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
+  --font-display: var(--font-barlow), "Arial Narrow", ui-sans-serif, sans-serif;
+}
+
+:root {
+  color-scheme: dark;
+}
+
+html {
+  background: var(--color-asphalt-950);
+}
+
+body {
+  background: var(--color-asphalt-950);
+  color: #f4f4f5;
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+:focus-visible {
+  outline: 2px solid var(--color-brand);
+  outline-offset: 2px;
+}
+
+::selection {
+  background: var(--color-brand);
+  color: #000;
+}

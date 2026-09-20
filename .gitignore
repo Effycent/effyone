@@ -1,0 +1,22 @@
+# dependencias y build
+node_modules/
+.next/
+out/
+*.tsbuildinfo
+next-env.d.ts
+
+# secretos: NUNCA se suben al repositorio
+.env
+.env.local
+.env.*.local
+
+# Supabase local
+supabase/.temp/
+supabase/.branches/
+
+# sistema y editores
+.DS_Store
+Thumbs.db
+.vercel/
+npm-debug.log*
+.env.local
