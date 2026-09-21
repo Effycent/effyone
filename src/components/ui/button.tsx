@@ -1,6 +1,6 @@
 import type { ButtonHTMLAttributes } from "react";
 
-type Variant = "primary" | "secondary";
+type Variant = "primary" | "secondary" | "danger";
 
 const base =
   "inline-flex h-12 items-center justify-center gap-2 px-6 font-display text-lg font-bold uppercase tracking-wide transition-colors disabled:cursor-not-allowed disabled:opacity-50";
@@ -10,6 +10,7 @@ const variants: Record<Variant, string> = {
   primary: "bg-brand text-black hover:bg-brand-strong",
   secondary:
     "border border-asphalt-600 bg-transparent text-white hover:border-asphalt-400 hover:bg-asphalt-800",
+  danger: "border border-danger bg-transparent text-danger hover:bg-danger hover:text-black",
 };
 
 type Props = ButtonHTMLAttributes<HTMLButtonElement> & {

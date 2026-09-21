@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { AppHeader } from "@/components/app-header";
 import { ROLE_LABELS } from "@/lib/auth/labels";
+import { ACCESS_LABELS } from "@/lib/billing/labels";
 import { requireTenantAccess } from "@/lib/auth/session";
 import { createClient } from "@/lib/supabase/server";
 
@@ -16,11 +17,14 @@ export default async function TenantHomePage({
 
   // RLS: un Administrador ve a todo su equipo; un Operador solo a sí mismo.
   const supabase = await createClient();
-  const { data: members } = await supabase
-    .from("profiles")
-    .select("id, full_name, role, is_active")
-    .eq("tenant_id", tenant.id)
-    .order("full_name");
+  const [{ data: members }, { data: overview }] = await Promise.all([
+    supabase
+      .from("profiles")
+      .select("id, full_name, role, is_active")
+      .eq("tenant_id", tenant.id)
+      .order("full_name"),
+    supabase.from("tenant_overview").select("plan_name, access_state").eq("id", tenant.id).maybeSingle(),
+  ]);
 
   return (
     <>
@@ -40,6 +44,8 @@ export default async function TenantHomePage({
               <Row label="Dirección" value={`/c/${tenant.slug}`} />
               <Row label="País" value={tenant.country} />
               <Row label="Zona horaria" value={tenant.timezone} />
+              {overview ? <Row label="Plan" value={overview.plan_name} /> : null}
+              {overview ? <Row label="Acceso" value={ACCESS_LABELS[overview.access_state]} /> : null}
             </dl>
           </section>
 

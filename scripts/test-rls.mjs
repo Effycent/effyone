@@ -1,4 +1,5 @@
-// Prueba automática de aislamiento multi-tenant contra tu proyecto Supabase:
+// Prueba automática de aislamiento, planes y reglas de suscripción contra tu
+// proyecto Supabase:
 //   npm run test:rls
 // Crea datos temporales (prefijo rlstest-), los prueba con sesiones reales y
 // los borra al terminar. No toca tus datos reales.
@@ -16,7 +17,18 @@ function check(name, ok, detail = "") {
   console.log(`${ok ? "PASS" : "FAIL"}  ${name}${!ok && detail ? `   -> ${detail}` : ""}`);
 }
 
-async function makeTenant(label) {
+const plans = {};
+
+async function loadPlans() {
+  const { data, error } = await admin.from("plans").select("id, code");
+  if (error) throw new Error(`No se pudieron leer los planes: ${error.message}`);
+  for (const p of data) plans[p.code] = p.id;
+  for (const code of ["bronze", "silver", "gold"]) {
+    if (!plans[code]) throw new Error(`Falta el plan "${code}". ¿Aplicaste la migración 1B?`);
+  }
+}
+
+async function makeTenant(label, planCode) {
   const { data, error } = await admin
     .from("tenants")
     .insert({
@@ -24,6 +36,7 @@ async function makeTenant(label) {
       name: `RLS Test ${label.toUpperCase()}`,
       country: "EC",
       timezone: "America/Guayaquil",
+      plan_id: plans[planCode],
     })
     .select("id, slug")
     .single();
@@ -43,6 +56,14 @@ async function makeUser(label, role, tenantId) {
   return user;
 }
 
+async function tryMakeUser(label, role, tenantId) {
+  try {
+    return { ok: true, user: await makeUser(label, role, tenantId) };
+  } catch (err) {
+    return { ok: false, message: err.message };
+  }
+}
+
 async function signedInClient(user) {
   const client = anonClient();
   const { error } = await client.auth.signInWithPassword({
@@ -54,22 +75,40 @@ async function signedInClient(user) {
 }
 
 const ids = (rows) => (rows ?? []).map((r) => r.id).sort();
+const daysAgo = (n) => new Date(Date.now() - n * 24 * 3600 * 1000).toISOString();
+
+async function overview(client, tenantId) {
+  const { data } = await client.from("tenant_overview").select("*").eq("id", tenantId).maybeSingle();
+  return data;
+}
 
 try {
-  const tenantA = await makeTenant("a");
-  const tenantB = await makeTenant("b");
+  await loadPlans();
+
+  // A = Oro (con operador) · B = Bronce · S = Plata
+  const tenantA = await makeTenant("a", "gold");
+  const tenantB = await makeTenant("b", "bronze");
+  const tenantS = await makeTenant("s", "silver");
   const adminA = await makeUser("admin-a", "tenant_admin", tenantA.id);
   const opA = await makeUser("op-a", "operator", tenantA.id);
   const adminB = await makeUser("admin-b", "tenant_admin", tenantB.id);
+  const adminS = await makeUser("admin-s", "tenant_admin", tenantS.id);
   const root = await makeUser("root", "super_admin", null);
 
+  const rootC = await signedInClient(root);
+
+  // ---------------------------------------------------------------- 1A
   console.log("\n== Visitante sin sesión ==");
   {
     const anon = anonClient();
-    const t = await anon.from("tenants").select("id");
-    const p = await anon.from("profiles").select("id");
-    check("No puede leer tenants", !!t.error || (t.data ?? []).length === 0);
-    check("No puede leer profiles", !!p.error || (p.data ?? []).length === 0);
+    for (const table of ["tenants", "profiles", "plans", "plan_features", "feature_catalog", "addons", "platform_settings"]) {
+      const r = await anon.from(table).select("*").limit(1);
+      check(`No puede leer ${table}`, !!r.error || (r.data ?? []).length === 0);
+    }
+    const v = await anon.from("tenant_overview").select("id");
+    check("No puede leer tenant_overview", !!v.error || (v.data ?? []).length === 0);
+    const f = await anon.rpc("tenant_has_feature", { p_tenant_id: tenantA.id, p_feature_key: "auto_fixtures" });
+    check("No puede consultar funciones de un tenant", !!f.error || f.data === false);
   }
 
   console.log("\n== Administrador del tenant A ==");
@@ -119,10 +158,9 @@ try {
 
   console.log("\n== Super Admin ==");
   {
-    const c = await signedInClient(root);
-    const t = await c.from("tenants").select("id").in("id", [tenantA.id, tenantB.id]);
+    const t = await rootC.from("tenants").select("id").in("id", [tenantA.id, tenantB.id]);
     check("Ve los tenants A y B", t.data?.length === 2);
-    const p = await c.from("profiles").select("id").in("id", [adminA.id, opA.id, adminB.id, root.id]);
+    const p = await rootC.from("profiles").select("id").in("id", [adminA.id, opA.id, adminB.id, root.id]);
     check("Ve los perfiles de todos", p.data?.length === 4);
   }
 
@@ -135,6 +173,185 @@ try {
     if (error) throw new Error(error.message);
     const after = await c.from("tenants").select("id");
     check("Tras desactivar: pierde acceso de inmediato", !after.error && after.data?.length === 0, JSON.stringify(after));
+  }
+
+  // ---------------------------------------------------------------- 1B
+  console.log("\n== Planes y funciones: lectura y escritura ==");
+  {
+    const c = await signedInClient(adminA);
+    const pl = await c.from("plans").select("code");
+    check("El cliente ve los 3 planes activos", ["bronze", "silver", "gold"].every((k) => pl.data?.some((p) => p.code === k)), JSON.stringify(pl.data));
+    const pf = await c.from("plan_features").select("feature_key").eq("plan_id", plans.gold);
+    check("El cliente ve la matriz de funciones", (pf.data?.length ?? 0) > 0);
+    const insPlan = await c.from("plans").insert({ code: `hack_${suffix}`, name: "Hack" });
+    check("NO puede crear planes", !!insPlan.error);
+    const updPlan = await c.from("plans").update({ price_cents: 1 }).eq("id", plans.gold).select("id");
+    check("NO puede cambiar precios", !updPlan.error && updPlan.data?.length === 0, JSON.stringify(updPlan));
+    const updFeat = await c
+      .from("plan_features")
+      .update({ enabled: true })
+      .eq("plan_id", plans.bronze)
+      .eq("feature_key", "read_api")
+      .select("feature_key");
+    check("NO puede activarse funciones", !updFeat.error && updFeat.data?.length === 0, JSON.stringify(updFeat));
+    const planCol = await c.from("tenants").update({ plan_id: plans.gold }).eq("id", tenantA.id).select("id");
+    check("NO puede cambiar su propio plan", !!planCol.error, JSON.stringify(planCol));
+    const statusCol = await c.from("tenants").update({ subscription_status: "active" }).eq("id", tenantA.id).select("id");
+    check("NO puede cambiar su estado de suscripción", !!statusCol.error, JSON.stringify(statusCol));
+    const rpc1 = await c.rpc("admin_set_tenant_plan", { p_tenant_id: tenantA.id, p_plan_id: plans.gold });
+    check("NO puede usar admin_set_tenant_plan", !!rpc1.error);
+    const rpc2 = await c.rpc("admin_set_subscription_status", { p_tenant_id: tenantA.id, p_status: "suspended" });
+    check("NO puede usar admin_set_subscription_status", !!rpc2.error);
+    const set = await c.from("platform_settings").update({ grace_days: 30 }).eq("id", true).select("id");
+    check("NO puede cambiar ajustes globales", !set.error && set.data?.length === 0, JSON.stringify(set));
+  }
+
+  console.log("\n== tenant_has_feature / tenant_feature_limit / tenant_entitlements ==");
+  {
+    const cA = await signedInClient(adminA);
+    const cB = await signedInClient(adminB);
+    const has = async (c, tenant, key) => (await c.rpc("tenant_has_feature", { p_tenant_id: tenant, p_feature_key: key })).data;
+    const lim = async (c, tenant, key) => (await c.rpc("tenant_feature_limit", { p_tenant_id: tenant, p_feature_key: key })).data;
+
+    check("Oro: incluye panel público", (await has(cA, tenantA.id, "public_panel")) === true);
+    check("Oro: incluye respaldo en Sheets", (await has(cA, tenantA.id, "sheets_backup")) === true);
+    check("Bronce: NO incluye panel público", (await has(cB, tenantB.id, "public_panel")) === false);
+    check("Bronce: incluye calendarios automáticos", (await has(cB, tenantB.id, "auto_fixtures")) === true);
+    check("Un cliente NO puede preguntar por otro tenant", (await has(cA, tenantB.id, "auto_fixtures")) === false);
+    check("El Super Admin puede preguntar por cualquiera", (await has(rootC, tenantB.id, "auto_fixtures")) === true);
+    check("Función inexistente = false", (await has(cA, tenantA.id, "no_existe")) === false);
+
+    check("Bronce: máximo 5 equipos por torneo", (await lim(cB, tenantB.id, "max_teams_per_tournament")) === 5);
+    check("Oro: administradores ilimitados (NULL)", (await lim(cA, tenantA.id, "max_admins")) === null);
+    check("Consultar el límite de otro tenant devuelve 0", (await lim(cA, tenantB.id, "max_teams_per_tournament")) === 0);
+
+    const ent = await cB.rpc("tenant_entitlements", { p_tenant_id: tenantB.id });
+    const catalog = await admin.from("feature_catalog").select("feature_key", { count: "exact", head: true });
+    check("tenant_entitlements devuelve todas las funciones", ent.data?.length === catalog.count, `${ent.data?.length} vs ${catalog.count}`);
+    const players = ent.data?.find((r) => r.feature_key === "max_players_per_tournament");
+    check("tenant_entitlements: Bronce = 75 jugadores", players?.limit_value === 75 && players?.enabled === true);
+    const entOther = await cA.rpc("tenant_entitlements", { p_tenant_id: tenantB.id });
+    check("tenant_entitlements de otro tenant viene vacío", (entOther.data ?? []).length === 0);
+  }
+
+  console.log("\n== Cambios de plan y estado (Super Admin) ==");
+  {
+    const cS = await signedInClient(adminS);
+
+    const ov0 = await overview(cS, tenantS.id);
+    check("Cliente Plata activo: acceso completo", ov0?.plan_code === "silver" && ov0?.access_state === "full", JSON.stringify(ov0));
+
+    const toDue = await rootC.rpc("admin_set_subscription_status", { p_tenant_id: tenantS.id, p_status: "past_due", p_note: "Prueba" });
+    check("Marcar en mora un plan de pago", !toDue.error, toDue.error?.message);
+    const ov1 = await overview(cS, tenantS.id);
+    check("En mora dentro de la gracia: acceso 'grace'", ov1?.access_state === "grace", JSON.stringify(ov1));
+    const upGrace = await cS.from("tenants").update({ name: "Editado en gracia" }).eq("id", tenantS.id).select("id");
+    check("En gracia: todavía puede editar", upGrace.data?.length === 1, JSON.stringify(upGrace));
+
+    await admin.from("tenants").update({ past_due_since: daysAgo(4) }).eq("id", tenantS.id);
+    const ov2 = await overview(cS, tenantS.id);
+    check("Pasada la gracia: acceso 'read_only'", ov2?.access_state === "read_only", JSON.stringify(ov2));
+    const upRo = await cS.from("tenants").update({ name: "Editado en mora" }).eq("id", tenantS.id).select("id");
+    check("Solo lectura: NO puede editar", !upRo.error && upRo.data?.length === 0, JSON.stringify(upRo));
+    const readRo = await cS.from("profiles").select("id");
+    check("Solo lectura: SIGUE pudiendo leer sus datos", (readRo.data?.length ?? 0) === 1);
+
+    const toFree = await rootC.rpc("admin_set_tenant_plan", { p_tenant_id: tenantS.id, p_plan_id: plans.bronze, p_note: "Baja a gratis" });
+    check("Cambiar de plan de pago a gratis", !toFree.error, toFree.error?.message);
+    const ov3 = await overview(cS, tenantS.id);
+    check("Plan gratuito: sale de la mora y vuelve a acceso completo", ov3?.plan_code === "bronze" && ov3?.subscription_status === "active" && ov3?.access_state === "full", JSON.stringify(ov3));
+
+    const freeDue = await rootC.rpc("admin_set_subscription_status", { p_tenant_id: tenantS.id, p_status: "past_due" });
+    check("Un plan gratuito NO puede entrar en mora", !!freeDue.error);
+
+    const evS = await rootC.from("tenant_subscription_events").select("event_type").eq("tenant_id", tenantS.id);
+    // mora → cambio de plan → salida automática de la mora
+    const types = (evS.data ?? []).map((e) => e.event_type).sort().join(",");
+    check(
+      "Se registraron los 3 cambios (mora, plan, salida de mora)",
+      types === "plan_changed,status_changed,status_changed",
+      types,
+    );
+    const evAsTenant = await cS.from("tenant_subscription_events").select("id");
+    check("El cliente NO ve el historial de suscripción", !evAsTenant.error && (evAsTenant.data ?? []).length === 0);
+    const evWrite = await cS.from("tenant_subscription_events").insert({ tenant_id: tenantS.id, event_type: "plan_changed" });
+    check("El cliente NO puede escribir en el historial", !!evWrite.error);
+    const evUpdate = await rootC.from("tenant_subscription_events").update({ note: "x" }).eq("tenant_id", tenantS.id).select("id");
+    check("El historial es inmutable (ni el Super Admin lo edita)", !!evUpdate.error);
+  }
+
+  console.log("\n== Mora, suspensión y funciones pausadas (tenant Oro) ==");
+  {
+    const cA = await signedInClient(adminA);
+    const has = async (key) => (await cA.rpc("tenant_has_feature", { p_tenant_id: tenantA.id, p_feature_key: key })).data;
+
+    await rootC.rpc("admin_set_subscription_status", { p_tenant_id: tenantA.id, p_status: "past_due" });
+    const first = await overview(cA, tenantA.id);
+    await rootC.rpc("admin_set_subscription_status", { p_tenant_id: tenantA.id, p_status: "past_due" });
+    const second = await overview(cA, tenantA.id);
+    check("Repetir 'en mora' no reinicia la cuenta de gracia", first?.past_due_since === second?.past_due_since);
+    check("En gracia: el respaldo en Sheets sigue activo", (await has("sheets_backup")) === true);
+
+    await admin.from("tenants").update({ past_due_since: daysAgo(5) }).eq("id", tenantA.id);
+    check("Solo lectura: el respaldo en Sheets se PAUSA", (await has("sheets_backup")) === false);
+    check("Solo lectura: los webhooks se PAUSAN", (await has("outbound_webhooks")) === false);
+    check("Solo lectura: la API se PAUSA", (await has("read_api")) === false);
+    check("Solo lectura: la exportación manual SIGUE activa", (await has("data_export")) === true);
+    const ent = await cA.rpc("tenant_entitlements", { p_tenant_id: tenantA.id });
+    check("tenant_entitlements refleja la pausa", ent.data?.find((r) => r.feature_key === "sheets_backup")?.enabled === false);
+
+    await rootC.rpc("admin_set_subscription_status", { p_tenant_id: tenantA.id, p_status: "suspended", p_note: "Prueba" });
+    const ovSus = await overview(cA, tenantA.id);
+    check("Suspendido: acceso 'suspended'", ovSus?.access_state === "suspended", JSON.stringify(ovSus));
+    const upSus = await cA.from("tenants").update({ name: "Suspendido edita" }).eq("id", tenantA.id).select("id");
+    check("Suspendido: NO puede editar", !upSus.error && upSus.data?.length === 0);
+    const readSus = await cA.from("profiles").select("id");
+    check("Suspendido: sigue leyendo sus datos", (readSus.data?.length ?? 0) === 2);
+
+    await rootC.rpc("admin_set_subscription_status", { p_tenant_id: tenantA.id, p_status: "canceled" });
+    const ovCan = await overview(cA, tenantA.id);
+    check("Cancelado: fecha de eliminación = cancelación + retención", !!ovCan?.purge_eligible_at && ovCan?.access_state === "canceled", JSON.stringify(ovCan));
+
+    await rootC.rpc("admin_set_subscription_status", { p_tenant_id: tenantA.id, p_status: "active" });
+    check("Reactivado: el respaldo en Sheets vuelve", (await has("sheets_backup")) === true);
+    const upBack = await cA.from("tenants").update({ name: "Reactivado" }).eq("id", tenantA.id).select("id");
+    check("Reactivado: vuelve a poder editar", upBack.data?.length === 1);
+  }
+
+  console.log("\n== Límites del plan validados en la base de datos ==");
+  {
+    const b2 = await tryMakeUser("admin-b2", "tenant_admin", tenantB.id);
+    check("Bronce (1 admin): el 2.º administrador se rechaza", !b2.ok && /administrador/i.test(b2.message), b2.message);
+
+    const opB = await tryMakeUser("op-b", "operator", tenantB.id);
+    check("Bronce: no se pueden crear operadores", !opB.ok && /operadores/i.test(opB.message), opB.message);
+
+    const tenantT = await makeTenant("t", "silver");
+    const t1 = await tryMakeUser("admin-t1", "tenant_admin", tenantT.id);
+    const t2 = await tryMakeUser("admin-t2", "tenant_admin", tenantT.id);
+    const t3 = await tryMakeUser("admin-t3", "tenant_admin", tenantT.id);
+    check("Plata (2 admins): el 1.º y el 2.º entran", t1.ok && t2.ok);
+    check("Plata (2 admins): el 3.º se rechaza", !t3.ok, t3.message);
+    const opT = await tryMakeUser("op-t", "operator", tenantT.id);
+    check("Plata: no incluye operadores (vocalía online es Oro)", !opT.ok, opT.message);
+
+    // Oro ilimitado y luego bajada a Bronce con exceso
+    const a2 = await tryMakeUser("admin-a2", "tenant_admin", tenantA.id);
+    const a3 = await tryMakeUser("admin-a3", "tenant_admin", tenantA.id);
+    check("Oro (ilimitado): entran administradores adicionales", a2.ok && a3.ok);
+
+    const down = await rootC.rpc("admin_set_tenant_plan", { p_tenant_id: tenantA.id, p_plan_id: plans.bronze });
+    check("Bajada Oro → Bronce con 3 administradores", !down.error, down.error?.message);
+    const keep = await admin.from("profiles").select("id").eq("tenant_id", tenantA.id).eq("role", "tenant_admin").eq("is_active", true);
+    check("Se CONSERVA lo existente (3 administradores activos)", keep.data?.length === 3, String(keep.data?.length));
+    const a4 = await tryMakeUser("admin-a4", "tenant_admin", tenantA.id);
+    check("Tras bajar de plan: se BLOQUEA crear nuevos", !a4.ok, a4.message);
+
+    if (a3.ok) {
+      await admin.from("profiles").update({ is_active: false }).eq("id", a3.user.id);
+      const react = await admin.from("profiles").update({ is_active: true }).eq("id", a3.user.id);
+      check("Reactivar un administrador por encima del límite se rechaza", !!react.error, JSON.stringify(react));
+    }
   }
 } catch (err) {
   console.error(`\nERROR: ${err.message}`);
