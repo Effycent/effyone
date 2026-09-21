@@ -1,81 +1,101 @@
 import type { Metadata } from "next";
-import { AppHeader } from "@/components/app-header";
+import Link from "next/link";
+import { FeatureSummary } from "@/components/feature-summary";
+import { Badge } from "@/components/ui/badge";
+import { Panel } from "@/components/ui/panel";
 import { ROLE_LABELS } from "@/lib/auth/labels";
-import { ACCESS_LABELS } from "@/lib/billing/labels";
-import { requireTenantAccess } from "@/lib/auth/session";
+import { ACCESS_LABELS, formatMoney } from "@/lib/billing/labels";
+import { accessTone } from "@/lib/billing/tones";
+import { getTenantPanel, tenantPath } from "@/lib/tenant/panel";
 import { createClient } from "@/lib/supabase/server";
 
-export const metadata: Metadata = { title: "Panel del complejo" };
+export const metadata: Metadata = { title: "Resumen" };
 
-export default async function TenantHomePage({
-  params,
-}: {
-  params: Promise<{ slug: string }>;
-}) {
+export default async function TenantHomePage({ params }: { params: Promise<{ slug: string }> }) {
   const { slug } = await params;
-  const { ctx, tenant, isSupportView } = await requireTenantAccess(slug);
+  const panel = await getTenantPanel(slug);
+  const { tenant, overview } = panel;
 
   // RLS: un Administrador ve a todo su equipo; un Operador solo a sí mismo.
   const supabase = await createClient();
-  const [{ data: members }, { data: overview }] = await Promise.all([
-    supabase
-      .from("profiles")
-      .select("id, full_name, role, is_active")
-      .eq("tenant_id", tenant.id)
-      .order("full_name"),
-    supabase.from("tenant_overview").select("plan_name, access_state").eq("id", tenant.id).maybeSingle(),
-  ]);
+  const { data: members } = await supabase
+    .from("profiles")
+    .select("id, full_name, role, is_active")
+    .eq("tenant_id", tenant.id)
+    .order("full_name");
+
+  const limits = panel.catalog.filter((f) => f.kind === "limit");
+  const activeAdmins = (members ?? []).filter((m) => m.role === "tenant_admin" && m.is_active).length;
 
   return (
     <>
-      <AppHeader ctx={ctx} context={tenant.name} />
-      <main className="mx-auto w-full max-w-7xl space-y-6 px-4 py-8 sm:px-6">
-        {isSupportView ? (
-          <p className="border-l-4 border-brand bg-asphalt-900 px-4 py-3 text-sm text-asphalt-200">
-            Vista de soporte: estás viendo el panel de este cliente como Super Admin.
+      <div className="grid gap-4 lg:grid-cols-3">
+        <Panel
+          title="Tu plan"
+          aside={
+            panel.canManage ? (
+              <Link href={tenantPath(slug, "/plan")} className="text-sm underline decoration-brand underline-offset-4">
+                Ver planes
+              </Link>
+            ) : null
+          }
+        >
+          <div className="mb-4 flex flex-wrap items-center gap-3">
+            <span className="font-display text-4xl font-extrabold uppercase">{overview.plan_name}</span>
+            <Badge tone={accessTone(overview.access_state)}>{ACCESS_LABELS[overview.access_state]}</Badge>
+          </div>
+          <p className="mb-4 text-sm text-asphalt-400">
+            {overview.price_cents === 0
+              ? "Gratis para siempre"
+              : `${formatMoney(overview.price_cents, overview.currency)} al mes`}
           </p>
-        ) : null}
+          <dl className="divide-y divide-asphalt-800 text-sm">
+            {limits.map((f) => {
+              const e = panel.entitlements.get(f.feature_key);
+              const value = e?.unlimited ? "Ilimitado" : String(e?.limit_value ?? 0);
+              const usage = f.feature_key === "max_admins" ? `${activeAdmins} de ` : "hasta ";
+              return (
+                <div key={f.feature_key} className="flex items-baseline justify-between gap-3 py-2.5">
+                  <dt className="text-asphalt-400">{f.name}</dt>
+                  <dd className="text-right font-medium tabular-nums">
+                    {e?.unlimited ? value : `${usage}${value}`}
+                  </dd>
+                </div>
+              );
+            })}
+          </dl>
+        </Panel>
 
-        <div className="grid gap-4 lg:grid-cols-[1fr_1.4fr]">
-          <section className="border border-asphalt-700 bg-asphalt-850 p-5">
-            <h2 className="font-display text-2xl font-bold uppercase tracking-wide">Complejo</h2>
-            <dl className="mt-4 divide-y divide-asphalt-800 text-sm">
-              <Row label="Nombre" value={tenant.name} />
-              <Row label="Dirección" value={`/c/${tenant.slug}`} />
-              <Row label="País" value={tenant.country} />
-              <Row label="Zona horaria" value={tenant.timezone} />
-              {overview ? <Row label="Plan" value={overview.plan_name} /> : null}
-              {overview ? <Row label="Acceso" value={ACCESS_LABELS[overview.access_state]} /> : null}
-            </dl>
-          </section>
+        <Panel title="Complejo">
+          <dl className="divide-y divide-asphalt-800 text-sm">
+            <Row label="Nombre" value={tenant.name} />
+            <Row label="Dirección" value={`/c/${tenant.slug}`} />
+            <Row label="País" value={tenant.country} />
+            <Row label="Zona horaria" value={tenant.timezone} />
+          </dl>
+        </Panel>
 
-          <section className="border border-asphalt-700 bg-asphalt-850">
-            <div className="flex items-center justify-between border-b border-asphalt-700 px-5 py-4">
-              <h2 className="font-display text-2xl font-bold uppercase tracking-wide">Equipo</h2>
-              <span className="text-xs uppercase tracking-widest text-asphalt-400">
-                {members?.length ?? 0} usuarios
-              </span>
-            </div>
-            <ul className="divide-y divide-asphalt-800">
-              {(members ?? []).map((m) => (
-                <li key={m.id} className="flex items-center justify-between gap-3 px-5 py-3 text-sm">
-                  <span className="font-medium">{m.full_name}</span>
-                  <span className="flex items-center gap-3">
-                    {m.is_active ? null : (
-                      <span className="text-xs uppercase tracking-widest text-danger">
-                        Inactivo
-                      </span>
-                    )}
-                    <span className="text-xs uppercase tracking-widest text-asphalt-400">
-                      {ROLE_LABELS[m.role]}
-                    </span>
-                  </span>
-                </li>
-              ))}
-            </ul>
-          </section>
-        </div>
-      </main>
+        <Panel
+          title="Equipo"
+          aside={<span className="text-xs uppercase tracking-widest text-asphalt-400">{members?.length ?? 0} usuarios</span>}
+        >
+          <ul className="divide-y divide-asphalt-800">
+            {(members ?? []).map((m) => (
+              <li key={m.id} className="flex items-center justify-between gap-3 py-2.5 text-sm first:pt-0">
+                <span className="font-medium">{m.full_name}</span>
+                <span className="flex items-center gap-3">
+                  {m.is_active ? null : <Badge tone="danger">Inactivo</Badge>}
+                  <span className="text-xs uppercase tracking-widest text-asphalt-400">{ROLE_LABELS[m.role]}</span>
+                </span>
+              </li>
+            ))}
+          </ul>
+        </Panel>
+      </div>
+
+      <Panel title="Funciones de tu plan">
+        <FeatureSummary panel={panel} slug={slug} />
+      </Panel>
     </>
   );
 }

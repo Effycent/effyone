@@ -11,6 +11,7 @@ export type AccessState = "full" | "grace" | "read_only" | "suspended" | "cancel
 export type FeatureKind = "boolean" | "limit";
 export type FeatureCategory = "limits" | "tournament" | "public" | "management" | "integrations";
 export type FeatureAvailability = "available" | "coming_soon";
+export type NotificationSeverity = "info" | "warning" | "critical";
 
 export type Database = {
   public: {
@@ -261,6 +262,7 @@ export type Database = {
           id: boolean;
           grace_days: number;
           canceled_retention_days: number;
+          email_channel_enabled: boolean;
           updated_at: string;
         };
         Insert: never;
@@ -268,6 +270,37 @@ export type Database = {
           grace_days?: number;
           canceled_retention_days?: number;
         };
+        Relationships: [];
+      };
+      notifications: {
+        Row: {
+          id: number;
+          audience: "tenant" | "platform";
+          tenant_id: string | null;
+          kind: string;
+          severity: NotificationSeverity;
+          title: string;
+          body: string | null;
+          link: string | null;
+          dedupe_key: string | null;
+          created_at: string;
+        };
+        Insert: never;
+        Update: never;
+        Relationships: [];
+      };
+      notification_reads: {
+        Row: {
+          notification_id: number;
+          user_id: string;
+          read_at: string;
+        };
+        Insert: {
+          notification_id: number;
+          user_id: string;
+          read_at?: string;
+        };
+        Update: never;
         Relationships: [];
       };
       tenant_subscription_events: {
@@ -325,11 +358,28 @@ export type Database = {
         Returns: {
           feature_key: string;
           kind: FeatureKind;
+          /** Usable ahora: incluida en el plan y no pausada. */
           enabled: boolean;
+          /** El plan la incluye (aunque esté en pausa). */
+          in_plan: boolean;
+          /** Incluida pero en pausa por mora, suspensión o cancelación. */
+          paused: boolean;
           limit_value: number | null;
           unlimited: boolean;
           availability: FeatureAvailability;
         }[];
+      };
+      sync_my_notifications: {
+        Args: Record<PropertyKey, never>;
+        Returns: undefined;
+      };
+      my_unread_notifications: {
+        Args: Record<PropertyKey, never>;
+        Returns: number;
+      };
+      request_plan_upgrade: {
+        Args: { p_plan_id: string; p_message?: string };
+        Returns: boolean;
       };
       admin_set_tenant_plan: {
         Args: { p_tenant_id: string; p_plan_id: string; p_note?: string };
@@ -357,3 +407,5 @@ export type Addon = Database["public"]["Tables"]["addons"]["Row"];
 export type PlatformSettings = Database["public"]["Tables"]["platform_settings"]["Row"];
 export type SubscriptionEvent = Database["public"]["Tables"]["tenant_subscription_events"]["Row"];
 export type TenantOverview = Database["public"]["Views"]["tenant_overview"]["Row"];
+export type AppNotification = Database["public"]["Tables"]["notifications"]["Row"];
+export type Entitlement = Database["public"]["Functions"]["tenant_entitlements"]["Returns"][number];

@@ -353,10 +353,214 @@ try {
       check("Reactivar un administrador por encima del límite se rechaza", !!react.error, JSON.stringify(react));
     }
   }
+  // ---------------------------------------------------------------- 1C
+  // N = Oro (admin + operador) · M = Plata · marca y avisos
+  const tenantN = await makeTenant("n", "gold");
+  const tenantM = await makeTenant("m", "silver");
+  const adminN = await makeUser("admin-n", "tenant_admin", tenantN.id);
+  const opN = await makeUser("op-n", "operator", tenantN.id);
+  const adminM = await makeUser("admin-m", "tenant_admin", tenantM.id);
+
+  console.log("\n== Avisos: quién los ve y cómo se generan ==");
+  {
+    const cN = await signedInClient(adminN);
+    const cOpN = await signedInClient(opN);
+    const cM = await signedInClient(adminM);
+    const kinds = async (c) =>
+      ((await c.from("notifications").select("kind").order("id")).data ?? []).map((n) => n.kind);
+
+    await rootC.rpc("admin_set_subscription_status", { p_tenant_id: tenantN.id, p_status: "past_due" });
+    check("Marcar en mora avisa al administrador", (await kinds(cN)).join() === "billing_past_due", (await kinds(cN)).join());
+    check("El operador NO ve avisos del cliente", (await kinds(cOpN)).length === 0);
+    check("Otro cliente NO ve esos avisos", (await kinds(cM)).length === 0);
+    check("Sin leer = 1", (await cN.rpc("my_unread_notifications")).data === 1);
+
+    await cN.rpc("sync_my_notifications");
+    await cN.rpc("sync_my_notifications");
+    check("Sincronizar varias veces no duplica avisos", (await kinds(cN)).length === 1);
+
+    // M entra en mora hace 5 días (pasada la gracia) sin haber pasado por el Backoffice
+    await admin
+      .from("tenants")
+      .update({ subscription_status: "past_due", past_due_since: daysAgo(5) })
+      .eq("id", tenantM.id);
+    await cM.rpc("sync_my_notifications");
+    const missed = await cM.from("notifications").select("kind, created_at").order("created_at");
+    check(
+      "Un cliente que no entró en días recibe los 3 hitos de la mora",
+      JSON.stringify((missed.data ?? []).map((n) => n.kind)) ===
+        JSON.stringify(["billing_past_due", "billing_grace_ending", "billing_read_only"]),
+      JSON.stringify(missed.data),
+    );
+    await cM.rpc("sync_my_notifications");
+    check("Repetir no crea más", ((await cM.from("notifications").select("id")).data ?? []).length === 3);
+
+    const ids = ((await cN.from("notifications").select("id")).data ?? []).map((n) => n.id);
+    const mark = await cN.from("notification_reads").upsert(ids.map((id) => ({ notification_id: id, user_id: adminN.id })), { onConflict: "notification_id,user_id", ignoreDuplicates: true });
+    check("Puede marcar sus avisos como leídos", !mark.error, mark.error?.message);
+    check("Sin leer baja a 0", (await cN.rpc("my_unread_notifications")).data === 0);
+
+    const foreign = ((await admin.from("notifications").select("id").eq("tenant_id", tenantM.id)).data ?? [])[0];
+    const markForeign = await cN.from("notification_reads").insert({ notification_id: foreign.id, user_id: adminN.id });
+    check("NO puede marcar avisos que no ve", !!markForeign.error);
+    const markAs = await cN.from("notification_reads").insert({ notification_id: ids[0], user_id: adminM.id });
+    check("NO puede marcar leídos en nombre de otro usuario", !!markAs.error);
+
+    await rootC.rpc("admin_set_subscription_status", { p_tenant_id: tenantN.id, p_status: "suspended" });
+    await rootC.rpc("admin_set_subscription_status", { p_tenant_id: tenantN.id, p_status: "active" });
+    await rootC.rpc("admin_set_tenant_plan", { p_tenant_id: tenantN.id, p_plan_id: plans.silver });
+    await rootC.rpc("admin_set_tenant_plan", { p_tenant_id: tenantN.id, p_plan_id: plans.gold });
+    const all = await kinds(cN);
+    check(
+      "Suspender, reactivar y cambiar de plan generan avisos",
+      ["billing_suspended", "billing_active", "plan_changed"].every((k) => all.includes(k)),
+      all.join(),
+    );
+    const rootTenantNotes = await rootC.from("notifications").select("id").eq("audience", "tenant");
+    check("El Super Admin no recibe los avisos de los clientes", (rootTenantNotes.data ?? []).length === 0);
+  }
+
+  console.log("\n== Solicitud de cambio de plan ==");
+  {
+    const cM = await signedInClient(adminM);
+    const cN = await signedInClient(adminN);
+    const cOpN = await signedInClient(opN);
+
+    const first = await cM.rpc("request_plan_upgrade", { p_plan_id: plans.gold, p_message: "Queremos vocalía online" });
+    check("El administrador puede solicitar otro plan", !first.error && first.data === true, first.error?.message);
+    const again = await cM.rpc("request_plan_upgrade", { p_plan_id: plans.gold });
+    check("Repetir la misma solicitud el mismo día no duplica", !again.error && again.data === false);
+    const own = await cM.rpc("request_plan_upgrade", { p_plan_id: plans.silver });
+    check("No se puede solicitar el plan que ya tiene", !!own.error);
+    const long = await cM.rpc("request_plan_upgrade", { p_plan_id: plans.bronze, p_message: "x".repeat(301) });
+    check("El mensaje largo se rechaza", !!long.error);
+    const op = await cOpN.rpc("request_plan_upgrade", { p_plan_id: plans.silver });
+    check("Un operador NO puede solicitar cambios de plan", !!op.error);
+
+    const req = await rootC.from("notifications").select("kind, tenant_id, title").eq("audience", "platform");
+    const mine = (req.data ?? []).filter((n) => n.tenant_id === tenantM.id);
+    check("El Super Admin recibe la solicitud", mine.length === 1 && mine[0].kind === "upgrade_requested", JSON.stringify(req.data));
+    const others = await cN.from("notifications").select("kind").eq("audience", "platform");
+    check("Los clientes NO ven avisos de la plataforma", (others.data ?? []).length === 0);
+  }
+
+  console.log("\n== Canal de correo previsto (entregas por canal) ==");
+  {
+    const d1 = await admin.from("notification_deliveries").select("channel, status");
+    check("Cada aviso tiene su entrega 'in_app' enviada", (d1.data ?? []).some((d) => d.channel === "in_app" && d.status === "sent"));
+    check("Con el canal de correo apagado no se crean entregas por correo", !(d1.data ?? []).some((d) => d.channel === "email"));
+
+    const cN = await signedInClient(adminN);
+    const clientRead = await cN.from("notification_deliveries").select("id");
+    check("Los clientes NO pueden leer las entregas", !!clientRead.error || (clientRead.data ?? []).length === 0);
+
+    await admin.from("platform_settings").update({ email_channel_enabled: true }).eq("id", true);
+    await rootC.rpc("admin_set_tenant_plan", { p_tenant_id: tenantN.id, p_plan_id: plans.silver });
+    const d2 = await admin.from("notification_deliveries").select("channel, status").eq("channel", "email");
+    check("Con el canal de correo encendido nacen entregas 'email' pendientes", (d2.data ?? []).some((d) => d.status === "pending"), JSON.stringify(d2.data));
+    await admin.from("platform_settings").update({ email_channel_enabled: false }).eq("id", true);
+    await rootC.rpc("admin_set_tenant_plan", { p_tenant_id: tenantN.id, p_plan_id: plans.gold });
+  }
+
+  console.log("\n== Marca del cliente (validada en la base de datos) ==");
+  {
+    const cB = await signedInClient(adminB);
+    const cN = await signedInClient(adminN);
+    const bronzeColor = await cB.from("tenants").update({ brand_primary: "#112233" }).eq("id", tenantB.id).select("id");
+    check("Bronce: NO puede poner colores", !!bronzeColor.error, JSON.stringify(bronzeColor));
+    const bronzeLogo = await cB.from("tenants").update({ logo_path: `${tenantB.id}/logo.png` }).eq("id", tenantB.id).select("id");
+    check("Bronce: NO puede poner logo", !!bronzeLogo.error);
+    const bronzeClear = await cB.from("tenants").update({ brand_primary: null }).eq("id", tenantB.id).select("id");
+    check("Bronce: sí puede dejar la marca vacía", !bronzeClear.error && bronzeClear.data?.length === 1);
+
+    const goldColor = await cN.from("tenants").update({ brand_primary: "#112233", brand_secondary: "#AABBCC" }).eq("id", tenantN.id).select("id");
+    check("Oro: puede poner colores", !goldColor.error && goldColor.data?.length === 1, JSON.stringify(goldColor));
+    const badHex = await cN.from("tenants").update({ brand_primary: "amarillo" }).eq("id", tenantN.id).select("id");
+    check("Un color inválido se rechaza", !!badHex.error);
+
+    // bajar de plan: se conserva lo existente y se bloquea cambiar
+    await rootC.rpc("admin_set_tenant_plan", { p_tenant_id: tenantN.id, p_plan_id: plans.bronze });
+    const kept = await admin.from("tenants").select("brand_primary").eq("id", tenantN.id).single();
+    check("Al bajar de plan se conservan los colores guardados", kept.data?.brand_primary === "#112233");
+    const changeAfter = await cN.from("tenants").update({ brand_primary: "#000000" }).eq("id", tenantN.id).select("id");
+    check("Al bajar de plan ya no puede cambiarlos", !!changeAfter.error);
+    const removeAfter = await cN.from("tenants").update({ brand_primary: null, brand_secondary: null }).eq("id", tenantN.id).select("id");
+    check("Al bajar de plan SÍ puede quitar su marca", !removeAfter.error && removeAfter.data?.length === 1, JSON.stringify(removeAfter));
+    await rootC.rpc("admin_set_tenant_plan", { p_tenant_id: tenantN.id, p_plan_id: plans.gold });
+  }
+
+  console.log("\n== Logo: almacenamiento por cliente ==");
+  {
+    // PNG válido de 1×1 píxel
+    const png = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==", "base64");
+    const bucket = (c) => c.storage.from("tenant-logos");
+
+    // M está en solo lectura (mora de 5 días): primero devolvemos su acceso completo
+    await admin.from("tenants").update({ subscription_status: "active", past_due_since: null }).eq("id", tenantM.id);
+    const cM = await signedInClient(adminM);
+    const cB = await signedInClient(adminB);
+    const cN = await signedInClient(adminN);
+
+    const ownPath = `${tenantM.id}/logo-test.png`;
+    const up = await bucket(cM).upload(ownPath, png, { contentType: "image/png" });
+    check("Plata: sube el logo a su carpeta", !up.error, up.error?.message);
+
+    const pub = bucket(cM).getPublicUrl(ownPath).data.publicUrl;
+    const res = await fetch(pub);
+    check("El logo es público (lo ven los hinchas sin iniciar sesión)", res.ok && res.headers.get("content-type") === "image/png", `${res.status}`);
+
+    const foreign = await bucket(cM).upload(`${tenantN.id}/hack.png`, png, { contentType: "image/png" });
+    check("NO puede subir a la carpeta de otro cliente", !!foreign.error);
+    const bronze = await bucket(cB).upload(`${tenantB.id}/logo.png`, png, { contentType: "image/png" });
+    check("Bronce: NO puede subir logo (su plan no incluye marca)", !!bronze.error);
+    const notImage = await bucket(cM).upload(`${tenantM.id}/nota.txt`, Buffer.from("hola"), { contentType: "text/plain" });
+    check("Solo se aceptan imágenes PNG, JPG o WebP", !!notImage.error);
+    const opUp = await signedInClient(opN).then((c) => bucket(c).upload(`${tenantN.id}/op.png`, png, { contentType: "image/png" }));
+    check("Un operador NO puede subir logo", !!opUp.error);
+
+    await admin.from("tenants").update({ subscription_status: "past_due", past_due_since: daysAgo(5) }).eq("id", tenantM.id);
+    const ro = await bucket(cM).upload(`${tenantM.id}/logo-ro.png`, png, { contentType: "image/png" });
+    check("En solo lectura NO puede subir logos", !!ro.error);
+    const roDel = await bucket(cM).remove([ownPath]);
+    check("En solo lectura NO puede borrar logos", (roDel.data ?? []).length === 0);
+
+    await admin.from("tenants").update({ subscription_status: "active", past_due_since: null }).eq("id", tenantM.id);
+    const del = await bucket(cM).remove([ownPath]);
+    check("Con acceso completo puede borrar su logo", (del.data ?? []).length === 1, JSON.stringify(del));
+
+    const ok2 = await bucket(cN).upload(`${tenantN.id}/logo.png`, png, { contentType: "image/png" });
+    check("Oro: sube el logo a su carpeta", !ok2.error, ok2.error?.message);
+  }
+
+  console.log("\n== tenant_entitlements: incluida vs en pausa ==");
+  {
+    const cN = await signedInClient(adminN);
+    const cB = await signedInClient(adminB);
+    await admin.from("tenants").update({ subscription_status: "past_due", past_due_since: daysAgo(6) }).eq("id", tenantN.id);
+    const ent = await cN.rpc("tenant_entitlements", { p_tenant_id: tenantN.id });
+    const sheets = ent.data?.find((r) => r.feature_key === "sheets_backup");
+    check(
+      "Oro en solo lectura: Sheets está en el plan pero EN PAUSA",
+      sheets?.in_plan === true && sheets?.paused === true && sheets?.enabled === false,
+      JSON.stringify(sheets),
+    );
+    const exportManual = ent.data?.find((r) => r.feature_key === "data_export");
+    check("La exportación manual no se pausa", exportManual?.enabled === true && exportManual?.paused === false);
+    const entB = await cB.rpc("tenant_entitlements", { p_tenant_id: tenantB.id });
+    const api = entB.data?.find((r) => r.feature_key === "read_api");
+    check("Bronce: la API no está en el plan (y no es una pausa)", api?.in_plan === false && api?.paused === false && api?.enabled === false);
+    await admin.from("tenants").update({ subscription_status: "active", past_due_since: null }).eq("id", tenantN.id);
+  }
 } catch (err) {
   console.error(`\nERROR: ${err.message}`);
   results.push(false);
 } finally {
+  // Logos de prueba en el almacenamiento
+  for (const id of tenantIds) {
+    const { data: files } = await admin.storage.from("tenant-logos").list(id);
+    if (files?.length) await admin.storage.from("tenant-logos").remove(files.map((f) => `${id}/${f.name}`));
+  }
+  await admin.from("platform_settings").update({ email_channel_enabled: false }).eq("id", true);
   for (const id of userIds) await admin.auth.admin.deleteUser(id); // borra también el perfil
   if (tenantIds.length > 0) await admin.from("tenants").delete().in("id", tenantIds);
 }

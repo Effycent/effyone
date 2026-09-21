@@ -45,3 +45,14 @@ const dateOnly = new Intl.DateTimeFormat("es", { dateStyle: "medium" });
 
 export const formatDateTime = (iso: string) => dateTime.format(new Date(iso));
 export const formatDate = (iso: string) => dateOnly.format(new Date(iso));
+
+/** Fecha y hora en la zona horaria del cliente (cada tenant tiene la suya). */
+export function formatDateTimeIn(iso: string, timeZone: string): string {
+  return new Intl.DateTimeFormat("es", { dateStyle: "medium", timeStyle: "short", timeZone }).format(
+    new Date(iso),
+  );
+}
+
+export function formatDateIn(iso: string, timeZone: string): string {
+  return new Intl.DateTimeFormat("es", { dateStyle: "medium", timeZone }).format(new Date(iso));
+}

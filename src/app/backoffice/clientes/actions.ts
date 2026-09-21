@@ -11,9 +11,13 @@ import {
   type ActionState,
 } from "@/lib/actions/state";
 import { requireSuperAdmin } from "@/lib/auth/session";
-import { generateTempPassword } from "@/lib/auth/passwords";
-import { createUserAccount } from "@/lib/backoffice/users";
 import { createAdminClient } from "@/lib/supabase/admin";
+import {
+  createUserAccount,
+  findTenantMember,
+  resetMemberPassword,
+  setMemberActive,
+} from "@/lib/team/accounts";
 import { createClient } from "@/lib/supabase/server";
 import {
   idSchema,
@@ -181,19 +185,6 @@ export async function createUserAction(_prev: ActionState, formData: FormData): 
   return okState("Usuario creado.", { credentials: account.credentials });
 }
 
-/** Devuelve el perfil solo si pertenece a ese cliente y no es Super Admin. */
-async function findTenantUser(tenantId: string, userId: string) {
-  const admin = createAdminClient();
-  const { data: profile } = await admin
-    .from("profiles")
-    .select("id, full_name, role, tenant_id")
-    .eq("id", userId)
-    .eq("tenant_id", tenantId)
-    .neq("role", "super_admin")
-    .maybeSingle();
-  return { admin, profile };
-}
-
 export async function resetPasswordAction(_prev: ActionState, formData: FormData): Promise<ActionState> {
   await requireSuperAdmin();
 
@@ -201,27 +192,15 @@ export async function resetPasswordAction(_prev: ActionState, formData: FormData
   const userId = idSchema.safeParse(getString(formData, "user_id"));
   if (!tenantId.success || !userId.success) return failState("Datos no válidos.");
 
-  const { admin, profile } = await findTenantUser(tenantId.data, userId.data);
-  if (!profile) return failState("Usuario no encontrado en este cliente.");
+  const admin = createAdminClient();
+  const member = await findTenantMember(admin, tenantId.data, userId.data);
+  if (!member) return failState("Usuario no encontrado en este cliente.");
 
-  const { data: authUser } = await admin.auth.admin.getUserById(profile.id);
-  const email = authUser.user?.email;
-  if (!email) return failState("No se encontró la cuenta del usuario.");
-
-  const password = generateTempPassword();
-  const { error } = await admin.auth.admin.updateUserById(profile.id, { password });
-  if (error) return failState("No se pudo restablecer la contraseña.");
-
-  const { error: flagError } = await admin
-    .from("profiles")
-    .update({ must_change_password: true })
-    .eq("id", profile.id);
-  if (flagError) return failState("La contraseña cambió, pero no se pudo marcar como temporal. Repite la acción.");
+  const result = await resetMemberPassword(admin, member);
+  if (!result.ok) return failState(result.message);
 
   refresh(tenantId.data);
-  return okState("Contraseña restablecida.", {
-    credentials: { name: profile.full_name, email, password },
-  });
+  return okState("Contraseña restablecida.", { credentials: result.credentials });
 }
 
 export async function setUserActiveAction(_prev: ActionState, formData: FormData): Promise<ActionState> {
@@ -232,25 +211,20 @@ export async function setUserActiveAction(_prev: ActionState, formData: FormData
   const active = getString(formData, "active") === "true";
   if (!tenantId.success || !userId.success) return failState("Datos no válidos.");
 
-  const { admin, profile } = await findTenantUser(tenantId.data, userId.data);
-  if (!profile) return failState("Usuario no encontrado en este cliente.");
+  const admin = createAdminClient();
+  const member = await findTenantMember(admin, tenantId.data, userId.data);
+  if (!member) return failState("Usuario no encontrado en este cliente.");
 
-  // 1) El perfil manda: inactivo = sin acceso a datos al instante (y valida límites del plan al reactivar).
-  const { error } = await admin.from("profiles").update({ is_active: active }).eq("id", profile.id);
-  if (error) return failState(dbErrorMessage(error, "No se pudo cambiar el estado del usuario."));
-
-  // 2) Además se bloquea/desbloquea el inicio de sesión en Auth.
-  const { error: banError } = await admin.auth.admin.updateUserById(profile.id, {
-    ban_duration: active ? "none" : "876000h",
-  });
+  const result = await setMemberActive(admin, member.id, active);
+  if (!result.ok) return failState(result.message);
 
   refresh(tenantId.data);
-  if (banError) {
-    return okState(
-      `Usuario ${active ? "activado" : "desactivado"}, pero no se pudo actualizar el bloqueo de inicio de sesión.`,
-    );
-  }
-  return okState(`Usuario ${active ? "activado" : "desactivado"}.`);
+  const label = active ? "activado" : "desactivado";
+  return okState(
+    result.banWarning
+      ? `Usuario ${label}, pero no se pudo actualizar el bloqueo de inicio de sesión.`
+      : `Usuario ${label}.`,
+  );
 }
 
 /** Elimina un cliente cancelado cuya retención ya venció. Irreversible. */
