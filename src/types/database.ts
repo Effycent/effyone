@@ -12,6 +12,12 @@ export type FeatureKind = "boolean" | "limit";
 export type FeatureCategory = "limits" | "tournament" | "public" | "management" | "integrations";
 export type FeatureAvailability = "available" | "coming_soon";
 export type NotificationSeverity = "info" | "warning" | "critical";
+export type TournamentFormat = "round_robin" | "single_elimination";
+export type TournamentStatus = "draft" | "scheduled" | "in_progress" | "finished" | "archived";
+export type StageStatus = "draft" | "scheduled" | "in_progress" | "finished";
+export type SeedingMethod = "random" | "manual";
+export type EntryStatus = "registered" | "withdrawn";
+export type TiebreakerCode = "head_to_head" | "goal_diff" | "goals_for" | "wins" | "fewer_cards";
 
 export type Database = {
   public: {
@@ -318,8 +324,230 @@ export type Database = {
         Update: never;
         Relationships: [];
       };
+      sports: {
+        Row: {
+          id: string;
+          code: string;
+          name: string;
+          is_active: boolean;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: {
+          id?: string;
+          code: string;
+          name: string;
+          is_active?: boolean;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Update: {
+          code?: string;
+          name?: string;
+          is_active?: boolean;
+        };
+        Relationships: [];
+      };
+      tournaments: {
+        Row: {
+          id: string;
+          tenant_id: string;
+          sport_id: string;
+          name: string;
+          status: TournamentStatus;
+          is_public: boolean;
+          discipline_yellow_for_suspension: number | null;
+          discipline_suspension_matches: number;
+          discipline_red_suspension_matches: number;
+          discipline_cards_reset_between_stages: boolean;
+          created_at: string;
+          updated_at: string;
+          archived_at: string | null;
+        };
+        Insert: never; // se crea con la función create_tournament()
+        Update: {
+          name?: string;
+          is_public?: boolean;
+          status?: TournamentStatus;
+          archived_at?: string | null;
+          discipline_yellow_for_suspension?: number | null;
+          discipline_suspension_matches?: number;
+          discipline_red_suspension_matches?: number;
+          discipline_cards_reset_between_stages?: boolean;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "tournaments_sport_id_fkey";
+            columns: ["sport_id"];
+            isOneToOne: false;
+            referencedRelation: "sports";
+            referencedColumns: ["id"];
+          },
+        ];
+      };
+      tournament_stages: {
+        Row: {
+          id: string;
+          tournament_id: string;
+          stage_order: number;
+          name: string;
+          format: TournamentFormat;
+          status: StageStatus;
+          round_robin_legs: number | null;
+          win_points: number | null;
+          draw_points: number | null;
+          loss_points: number | null;
+          tie_breakers: TiebreakerCode[] | null;
+          bracket_seeding: SeedingMethod | null;
+          third_place_match: boolean | null;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: never;
+        Update: never;
+        Relationships: [];
+      };
+      tournament_groups: {
+        Row: {
+          id: string;
+          stage_id: string;
+          name: string;
+          group_order: number;
+          created_at: string;
+        };
+        Insert: never;
+        Update: never;
+        Relationships: [];
+      };
+      teams: {
+        Row: {
+          id: string;
+          tenant_id: string;
+          name: string;
+          short_name: string | null;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: {
+          id?: string;
+          tenant_id: string;
+          name: string;
+          short_name?: string | null;
+        };
+        Update: {
+          name?: string;
+          short_name?: string | null;
+        };
+        Relationships: [];
+      };
+      tournament_entries: {
+        Row: {
+          id: string;
+          tournament_id: string;
+          team_id: string;
+          tenant_id: string;
+          status: EntryStatus;
+          seed: number | null;
+          created_at: string;
+        };
+        Insert: {
+          id?: string;
+          tournament_id: string;
+          team_id: string;
+          tenant_id: string;
+          status?: EntryStatus;
+          seed?: number | null;
+        };
+        Update: {
+          status?: EntryStatus;
+          seed?: number | null;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "tournament_entries_team_id_fkey";
+            columns: ["team_id"];
+            isOneToOne: false;
+            referencedRelation: "teams";
+            referencedColumns: ["id"];
+          },
+        ];
+      };
+      roster_players: {
+        Row: {
+          id: string;
+          tournament_entry_id: string;
+          tenant_id: string;
+          full_name: string;
+          jersey_number: number | null;
+          document_id: string | null;
+          birth_date: string | null;
+          is_active: boolean;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: {
+          id?: string;
+          tournament_entry_id: string;
+          tenant_id: string;
+          full_name: string;
+          jersey_number?: number | null;
+          document_id?: string | null;
+          birth_date?: string | null;
+          is_active?: boolean;
+        };
+        Update: {
+          full_name?: string;
+          jersey_number?: number | null;
+          document_id?: string | null;
+          birth_date?: string | null;
+          is_active?: boolean;
+        };
+        Relationships: [];
+      };
+      tournament_addons: {
+        Row: {
+          id: string;
+          tournament_id: string;
+          addon_id: string;
+          is_active: boolean;
+          note: string | null;
+          activated_at: string;
+          deactivated_at: string | null;
+        };
+        Insert: {
+          id?: string;
+          tournament_id: string;
+          addon_id: string;
+          is_active?: boolean;
+          note?: string | null;
+          deactivated_at?: string | null;
+        };
+        Update: {
+          is_active?: boolean;
+          note?: string | null;
+          deactivated_at?: string | null;
+        };
+        Relationships: [];
+      };
     };
     Views: {
+      tournament_overview: {
+        Row: {
+          id: string;
+          tenant_id: string;
+          name: string;
+          status: TournamentStatus;
+          is_public: boolean;
+          created_at: string;
+          sport_code: string;
+          sport_name: string;
+          stage_id: string | null;
+          format: TournamentFormat | null;
+          teams_count: number;
+          players_count: number;
+        };
+        Relationships: [];
+      };
       tenant_overview: {
         Row: {
           id: string;
@@ -389,10 +617,34 @@ export type Database = {
         Args: { p_tenant_id: string; p_status: SubscriptionStatus; p_note?: string };
         Returns: undefined;
       };
+      create_tournament: {
+        Args: {
+          p_tenant_id: string;
+          p_sport_id: string;
+          p_name: string;
+          p_format: TournamentFormat;
+          p_is_public?: boolean;
+          p_round_robin_legs?: number;
+          p_win_points?: number;
+          p_draw_points?: number;
+          p_loss_points?: number;
+          p_tie_breakers?: TiebreakerCode[];
+          p_bracket_seeding?: SeedingMethod;
+          p_third_place_match?: boolean;
+          p_discipline_yellow_for_suspension?: number | null;
+          p_discipline_suspension_matches?: number;
+          p_discipline_red_suspension_matches?: number;
+          p_discipline_cards_reset_between_stages?: boolean;
+        };
+        Returns: string;
+      };
     };
     Enums: {
       app_role: AppRole;
       subscription_status: SubscriptionStatus;
+      tournament_format: TournamentFormat;
+      tournament_status: TournamentStatus;
+      tiebreaker_code: TiebreakerCode;
     };
     CompositeTypes: { [_ in never]: never };
   };
@@ -409,3 +661,12 @@ export type SubscriptionEvent = Database["public"]["Tables"]["tenant_subscriptio
 export type TenantOverview = Database["public"]["Views"]["tenant_overview"]["Row"];
 export type AppNotification = Database["public"]["Tables"]["notifications"]["Row"];
 export type Entitlement = Database["public"]["Functions"]["tenant_entitlements"]["Returns"][number];
+export type Sport = Database["public"]["Tables"]["sports"]["Row"];
+export type Tournament = Database["public"]["Tables"]["tournaments"]["Row"];
+export type TournamentStage = Database["public"]["Tables"]["tournament_stages"]["Row"];
+export type TournamentGroup = Database["public"]["Tables"]["tournament_groups"]["Row"];
+export type Team = Database["public"]["Tables"]["teams"]["Row"];
+export type TournamentEntry = Database["public"]["Tables"]["tournament_entries"]["Row"];
+export type RosterPlayer = Database["public"]["Tables"]["roster_players"]["Row"];
+export type TournamentAddon = Database["public"]["Tables"]["tournament_addons"]["Row"];
+export type TournamentOverview = Database["public"]["Views"]["tournament_overview"]["Row"];

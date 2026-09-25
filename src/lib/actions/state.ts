@@ -43,6 +43,11 @@ const CONSTRAINT_MESSAGES: Record<string, string> = {
   plans_code_format: "El código del plan solo admite minúsculas, números y guion bajo.",
   plans_default_is_active: "El plan por defecto no se puede desactivar.",
   plans_price_nonnegative: "El precio no puede ser negativo.",
+  teams_tenant_name_unique: "Ya existe un equipo con ese nombre.",
+  sports_code_key: "Ya existe un deporte con ese código.",
+  roster_players_jersey_unique: "Ese dorsal ya está usado en este equipo.",
+  tournament_entries_unique: "Ese equipo ya está inscrito en este torneo.",
+  tournament_addons_unique: "Ese add-on ya está asignado a este torneo.",
 };
 
 /** Traduce errores de PostgreSQL a mensajes claros para el usuario. */

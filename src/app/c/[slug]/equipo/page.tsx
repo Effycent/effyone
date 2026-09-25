@@ -5,6 +5,7 @@ import { LockedFeature } from "@/components/locked-feature";
 import { Badge } from "@/components/ui/badge";
 import { Panel } from "@/components/ui/panel";
 import { TextField } from "@/components/ui/text-field";
+import { UsageMeter } from "@/components/usage-meter";
 import { ROLE_LABELS } from "@/lib/auth/labels";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
@@ -45,28 +46,12 @@ export default async function TeamPage({ params }: { params: Promise<{ slug: str
   return (
     <>
       <Panel title="Administradores" description="Personas que pueden gestionar todo tu complejo.">
-        <div className="space-y-3">
-          <p className="flex items-baseline gap-3">
-            <span className="font-display text-5xl font-extrabold tabular-nums">{activeAdmins}</span>
-            <span className="text-asphalt-400">
-              {unlimited ? "administradores activos (sin límite en tu plan)" : `de ${maxAdmins} permitidos en tu plan`}
-            </span>
-          </p>
-          {unlimited ? null : (
-            <div
-              role="progressbar"
-              aria-valuemin={0}
-              aria-valuemax={maxAdmins}
-              aria-valuenow={Math.min(activeAdmins, maxAdmins)}
-              className="h-2 w-full bg-asphalt-700"
-            >
-              <div
-                className={`h-full ${atLimit ? "bg-danger" : "bg-brand"}`}
-                style={{ width: `${maxAdmins === 0 ? 100 : Math.min(100, (activeAdmins / maxAdmins) * 100)}%` }}
-              />
-            </div>
-          )}
-        </div>
+        <UsageMeter
+          value={activeAdmins}
+          limit={unlimited ? null : maxAdmins}
+          label={`de ${maxAdmins} permitidos en tu plan`}
+          unlimitedLabel="administradores activos (sin límite en tu plan)"
+        />
       </Panel>
 
       <Panel title="Usuarios" description="Cada persona ingresa con su correo y una contraseña temporal.">

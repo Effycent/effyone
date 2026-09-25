@@ -16,8 +16,10 @@ export function TenantNav({ slug, showManagement, unread }: Props) {
 
   const items = [
     { href: base, label: "Resumen", exact: true },
+    { href: `${base}/torneos`, label: "Torneos" },
     ...(showManagement
       ? [
+          { href: `${base}/clubes`, label: "Clubes" },
           { href: `${base}/equipo`, label: "Equipo" },
           { href: `${base}/plan`, label: "Mi plan" },
           { href: `${base}/perfil`, label: "Perfil" },
