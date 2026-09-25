@@ -517,6 +517,12 @@ export type Database = {
           leg: number;
           home_entry_id: string | null;
           away_entry_id: string | null;
+          /** Llaves: el lado sale del ganador/perdedor de otro partido (se resuelve desde resultados). */
+          home_source_match_id: string | null;
+          home_source_kind: "winner" | "loser" | null;
+          away_source_match_id: string | null;
+          away_source_kind: "winner" | "loser" | null;
+          is_third_place: boolean;
           scheduled_at: string | null;
           venue: string | null;
           status: MatchStatus;
@@ -647,6 +653,18 @@ export type Database = {
           p_days_between_rounds?: number;
           p_kickoff_time?: string;
           p_shuffle?: boolean;
+        };
+        Returns: number;
+      };
+      generate_single_elimination_bracket: {
+        Args: {
+          p_stage_id: string;
+          p_first_date?: string | null;
+          p_days_between_rounds?: number;
+          p_kickoff_time?: string;
+          p_seeding?: SeedingMethod | null;
+          p_manual_slots?: (string | null)[] | null;
+          p_third_place?: boolean | null;
         };
         Returns: number;
       };

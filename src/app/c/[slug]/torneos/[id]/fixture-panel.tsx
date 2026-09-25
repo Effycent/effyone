@@ -4,9 +4,10 @@ import { Badge } from "@/components/ui/badge";
 import { CheckboxField } from "@/components/ui/checkbox-field";
 import { Panel } from "@/components/ui/panel";
 import { TextField } from "@/components/ui/text-field";
-import { formatDateTimeIn, toLocalInputValue } from "@/lib/billing/labels";
+import { formatDateTimeIn } from "@/lib/billing/labels";
 import type { Match, TournamentStage } from "@/types/database";
-import { clearFixtureAction, generateFixtureAction, setMatchScheduleAction } from "../fixture-actions";
+import { clearFixtureAction, generateFixtureAction } from "../fixture-actions";
+import { MatchRow } from "./match-row";
 
 type Props = {
   slug: string;
@@ -19,12 +20,6 @@ type Props = {
   registeredEntryIds: string[];
   timezone: string;
   canEdit: boolean;
-};
-
-const MATCH_STATUS_LABEL: Record<string, string> = {
-  in_progress: "En juego",
-  finished: "Finalizado",
-  canceled: "Cancelado",
 };
 
 /** Fecha de la jornada, solo si TODOS sus partidos comparten la misma. */
@@ -144,41 +139,15 @@ export function FixturePanel({
                   </header>
                   <ul className="divide-y divide-asphalt-800">
                     {list.map((m) => (
-                      <li key={m.id} className="px-4 py-3">
-                        <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
-                          <span className="min-w-0 flex-1 font-medium">
-                            {name(m.home_entry_id)} <span className="px-1 text-asphalt-400">vs</span> {name(m.away_entry_id)}
-                          </span>
-                          <span className="text-xs text-asphalt-400">
-                            {m.scheduled_at ? formatDateTimeIn(m.scheduled_at, timezone) : "Sin fecha"}
-                            {m.venue ? ` · ${m.venue}` : ""}
-                          </span>
-                          {m.status !== "scheduled" ? <Badge tone="warn">{MATCH_STATUS_LABEL[m.status]}</Badge> : null}
-                        </div>
-                        {canEdit && m.status === "scheduled" ? (
-                          <details className="mt-2">
-                            <summary className="cursor-pointer text-xs text-asphalt-400 hover:text-white">
-                              Editar fecha y sede
-                            </summary>
-                            <ActionForm
-                              action={setMatchScheduleAction}
-                              submitLabel="Guardar"
-                              compact
-                              className="mt-3 grid gap-3 sm:grid-cols-[14rem_1fr_auto] sm:items-end"
-                            >
-                              <input type="hidden" name="match_id" value={m.id} />
-                              <input type="hidden" name="tournament_id" value={tournamentId} />
-                              <TextField
-                                label="Fecha y hora"
-                                name="scheduled_local"
-                                type="datetime-local"
-                                defaultValue={m.scheduled_at ? toLocalInputValue(m.scheduled_at, timezone) : ""}
-                              />
-                              <TextField label="Sede (opcional)" name="venue" defaultValue={m.venue ?? ""} maxLength={120} />
-                            </ActionForm>
-                          </details>
-                        ) : null}
-                      </li>
+                      <MatchRow
+                        key={m.id}
+                        match={m}
+                        homeLabel={name(m.home_entry_id)}
+                        awayLabel={name(m.away_entry_id)}
+                        tournamentId={tournamentId}
+                        timezone={timezone}
+                        canEdit={canEdit}
+                      />
                     ))}
                   </ul>
                   {resting.length > 0 ? (

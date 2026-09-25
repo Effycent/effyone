@@ -21,6 +21,7 @@ import {
   setRosterPlayerActiveAction,
   setTournamentStatusAction,
 } from "../actions";
+import { BracketPanel } from "./bracket-panel";
 import { FixturePanel } from "./fixture-panel";
 
 export const metadata: Metadata = { title: "Torneo" };
@@ -286,11 +287,16 @@ export default async function TournamentDetailPage({
           canEdit={canEdit && tournament.status !== "finished" && tournament.status !== "archived"}
         />
       ) : stage ? (
-        <Panel title="Llave eliminatoria">
-          <p className="text-sm text-asphalt-200">
-            La generación de la llave (cruces, sorteo y tercer puesto) estará disponible próximamente.
-          </p>
-        </Panel>
+        <BracketPanel
+          slug={slug}
+          tournamentId={id}
+          stage={stage}
+          matches={matches ?? []}
+          teamNames={teamNames}
+          registeredTeams={registeredEntries.map((e) => ({ id: e.id, name: teamNames.get(e.id) ?? "Equipo" }))}
+          timezone={panel.tenant.timezone}
+          canEdit={canEdit && tournament.status !== "finished" && tournament.status !== "archived"}
+        />
       ) : null}
 
       {canEdit ? (

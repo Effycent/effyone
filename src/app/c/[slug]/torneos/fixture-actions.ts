@@ -58,6 +58,63 @@ export async function generateFixtureAction(_prev: ActionState, formData: FormDa
   return okState(`Calendario generado: ${data} partidos.`);
 }
 
+const bracketSchema = generateSchema.omit({ shuffle: true }).extend({
+  seeding: z.enum(["random", "manual"]),
+  third_place: z.boolean(),
+  slot_count: z.coerce.number().int().min(2).max(64),
+});
+
+export async function generateBracketAction(_prev: ActionState, formData: FormData): Promise<ActionState> {
+  const guard = await requireTenantAdminAction();
+  if (!guard.ok) return failState(guard.message);
+
+  const parsed = bracketSchema.safeParse({
+    stage_id: getString(formData, "stage_id"),
+    tournament_id: getString(formData, "tournament_id"),
+    first_date: getString(formData, "first_date"),
+    days_between_rounds: getString(formData, "days_between_rounds") || "7",
+    kickoff_time: getString(formData, "kickoff_time") || "15:00",
+    seeding: getString(formData, "seeding") || "random",
+    third_place: getBool(formData, "third_place"),
+    slot_count: getString(formData, "slot_count") || "2",
+  });
+  if (!parsed.success) return failState(firstIssue(parsed.error));
+  const v = parsed.data;
+
+  // Cruces manuales: una posición por lugar de la primera ronda ("" = lugar libre).
+  let manualSlots: (string | null)[] | undefined;
+  if (v.seeding === "manual") {
+    manualSlots = [];
+    for (let i = 1; i <= v.slot_count; i++) {
+      const raw = getString(formData, `slot_${i}`);
+      if (raw === "") {
+        manualSlots.push(null);
+        continue;
+      }
+      if (!idSchema.safeParse(raw).success) return failState("Uno de los equipos elegidos no es válido.");
+      manualSlots.push(raw);
+    }
+    const chosen = manualSlots.filter((s): s is string => s !== null);
+    if (new Set(chosen).size !== chosen.length) return failState("Un mismo equipo está elegido en más de un lugar.");
+  }
+
+  // Toda la lógica y las validaciones (plan, permisos, bloqueo, cruces) viven en la función SQL.
+  const supabase = await createClient();
+  const { data, error } = await supabase.rpc("generate_single_elimination_bracket", {
+    p_stage_id: v.stage_id,
+    p_first_date: v.first_date,
+    p_days_between_rounds: v.days_between_rounds,
+    p_kickoff_time: v.kickoff_time,
+    p_seeding: v.seeding,
+    p_manual_slots: manualSlots ?? null,
+    p_third_place: v.third_place,
+  });
+  if (error) return failState(dbErrorMessage(error, "No se pudo generar la llave."));
+
+  refresh(guard.slug, v.tournament_id);
+  return okState(`Llave generada: ${data} partidos.`);
+}
+
 export async function clearFixtureAction(_prev: ActionState, formData: FormData): Promise<ActionState> {
   const guard = await requireTenantAdminAction();
   if (!guard.ok) return failState(guard.message);

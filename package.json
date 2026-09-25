@@ -15,7 +15,8 @@
     "seed:dev": "node --env-file=.env.local scripts/dev-seed.mjs",
     "test:rls": "node --env-file=.env.local scripts/test-rls.mjs",
     "test:tournaments": "node --env-file=.env.local scripts/test-tournament-engine.mjs",
-    "test:fixtures": "node --env-file=.env.local scripts/test-fixtures.mjs"
+    "test:fixtures": "node --env-file=.env.local scripts/test-fixtures.mjs",
+    "test:brackets": "node --env-file=.env.local scripts/test-brackets.mjs"
   },
   "dependencies": {
     "@supabase/ssr": "^0.12.7",
