@@ -18,6 +18,7 @@ export type StageStatus = "draft" | "scheduled" | "in_progress" | "finished";
 export type SeedingMethod = "random" | "manual";
 export type EntryStatus = "registered" | "withdrawn";
 export type TiebreakerCode = "head_to_head" | "goal_diff" | "goals_for" | "wins" | "fewer_cards";
+export type MatchStatus = "scheduled" | "in_progress" | "finished" | "canceled";
 
 export type Database = {
   public: {
@@ -504,6 +505,28 @@ export type Database = {
         };
         Relationships: [];
       };
+      matches: {
+        Row: {
+          id: string;
+          tenant_id: string;
+          tournament_id: string;
+          stage_id: string;
+          group_id: string | null;
+          round_number: number;
+          slot: number;
+          leg: number;
+          home_entry_id: string | null;
+          away_entry_id: string | null;
+          scheduled_at: string | null;
+          venue: string | null;
+          status: MatchStatus;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: never; // solo lo escriben las funciones de calendario
+        Update: never;
+        Relationships: [];
+      };
       tournament_addons: {
         Row: {
           id: string;
@@ -617,6 +640,24 @@ export type Database = {
         Args: { p_tenant_id: string; p_status: SubscriptionStatus; p_note?: string };
         Returns: undefined;
       };
+      generate_round_robin_fixture: {
+        Args: {
+          p_stage_id: string;
+          p_first_date?: string | null;
+          p_days_between_rounds?: number;
+          p_kickoff_time?: string;
+          p_shuffle?: boolean;
+        };
+        Returns: number;
+      };
+      clear_stage_fixture: {
+        Args: { p_stage_id: string };
+        Returns: undefined;
+      };
+      set_match_schedule: {
+        Args: { p_match_id: string; p_local_time: string | null; p_venue?: string | null };
+        Returns: undefined;
+      };
       create_tournament: {
         Args: {
           p_tenant_id: string;
@@ -640,6 +681,7 @@ export type Database = {
       };
     };
     Enums: {
+      match_status: MatchStatus;
       app_role: AppRole;
       subscription_status: SubscriptionStatus;
       tournament_format: TournamentFormat;
@@ -668,5 +710,6 @@ export type TournamentGroup = Database["public"]["Tables"]["tournament_groups"][
 export type Team = Database["public"]["Tables"]["teams"]["Row"];
 export type TournamentEntry = Database["public"]["Tables"]["tournament_entries"]["Row"];
 export type RosterPlayer = Database["public"]["Tables"]["roster_players"]["Row"];
-export type TournamentAddon = Database["public"]["Tables"]["tournament_addons"]["Row"];
+export type Match = Database["public"]["Tables"]["matches"]["Row"];
+export type TournamentAddon =Database["public"]["Tables"]["tournament_addons"]["Row"];
 export type TournamentOverview = Database["public"]["Views"]["tournament_overview"]["Row"];

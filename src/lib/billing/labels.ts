@@ -53,6 +53,20 @@ export function formatDateTimeIn(iso: string, timeZone: string): string {
   );
 }
 
+/** Valor para <input type="datetime-local"> en la zona horaria del cliente: "2026-11-01T18:30". */
+export function toLocalInputValue(iso: string, timeZone: string): string {
+  const parts = new Intl.DateTimeFormat("sv-SE", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).format(new Date(iso));
+  return parts.replace(" ", "T");
+}
+
 export function formatDateIn(iso: string, timeZone: string): string {
   return new Intl.DateTimeFormat("es", { dateStyle: "medium", timeZone }).format(new Date(iso));
 }

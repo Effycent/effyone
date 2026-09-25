@@ -21,6 +21,7 @@ import {
   setRosterPlayerActiveAction,
   setTournamentStatusAction,
 } from "../actions";
+import { FixturePanel } from "./fixture-panel";
 
 export const metadata: Metadata = { title: "Torneo" };
 
@@ -69,6 +70,18 @@ export default async function TournamentDetailPage({
   const { data: rosterRows } = entryIds.length
     ? await supabase.from("roster_players").select("*").in("tournament_entry_id", entryIds).order("full_name")
     : { data: [] };
+
+  const { data: matches } = stage
+    ? await supabase
+        .from("matches")
+        .select("*")
+        .eq("stage_id", stage.id)
+        .order("round_number")
+        .order("slot")
+    : { data: [] };
+  const teamNames = new Map<string, string>(
+    (entries ?? []).map((e) => [e.id, (e as unknown as { teams: { name: string } | null }).teams?.name ?? "Equipo"]),
+  );
 
   const rosterByEntry = new Map<string, typeof rosterRows>();
   for (const p of rosterRows ?? []) {
@@ -260,6 +273,25 @@ export default async function TournamentDetailPage({
           </ul>
         )}
       </Panel>
+
+      {stage?.format === "round_robin" ? (
+        <FixturePanel
+          slug={slug}
+          tournamentId={id}
+          stage={stage}
+          matches={matches ?? []}
+          teamNames={teamNames}
+          registeredEntryIds={registeredEntries.map((e) => e.id)}
+          timezone={panel.tenant.timezone}
+          canEdit={canEdit && tournament.status !== "finished" && tournament.status !== "archived"}
+        />
+      ) : stage ? (
+        <Panel title="Llave eliminatoria">
+          <p className="text-sm text-asphalt-200">
+            La generación de la llave (cruces, sorteo y tercer puesto) estará disponible próximamente.
+          </p>
+        </Panel>
+      ) : null}
 
       {canEdit ? (
         <div className="grid gap-6 lg:grid-cols-2">
